@@ -5,6 +5,7 @@ import pandas as pd
 import tensorflow as tf
 from copy import deepcopy
 import gc
+import sys
 
 from load_fasta import *
 
