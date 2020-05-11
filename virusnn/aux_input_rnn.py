@@ -2,12 +2,12 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from copy import deepcopy
+import gc
 
 from load_fasta import *
 
-# Define infiles
-fasta_file = "/ssd/johannes/fdd3424/results/2020-05-06/gisaid_cov2020.train_50.augur_seq.ali.fasta.gz"
-relations_file = "/ssd/johannes/fdd3424/results/2020-05-07/gisaid_cov2020.train_50.relations.tab.gz"
+# Usage: ./aux_input_rnn.py fasta_file felations_file outdir
+fasta_file, relations_file, outdir = sys.argv[1:]
 
 # Create character to index and index to character mappings
 vocab = [' ','A','T','G','C','^','$']
@@ -35,7 +35,7 @@ d_dec = len(vocab) # Input dimensionality for decoder
 # Construct model
 lstm_units = 128
 
-# The encoder takes an ancestral sequence formatted as integers
+# The encoder takes an ancestral sequence in onehot format
 encoder_in = tf.keras.Input(
     shape=(n, d_enc), dtype='float32', name='encoder_input'
 )
@@ -96,87 +96,77 @@ model = tf.keras.Model(
 
 # Compile the model
 model.compile(optimizer='adam', loss='categorical_crossentropy')
+model.summary()
 
+# Train the model using a small number of relations at a time to fit RAM
+m = 64
 
-# Prepare training data
-close = np.array(relations[relations["Generations"] == 1].index)
-far = np.array(relations[relations["Distance"] > 0.08].index)
-wanted_relations = np.unique(np.concatenate([close, far]))
-np.random.shuffle(wanted_relations)
-wanted_relations = wanted_relations[:1000]
-N = len(wanted_relations)
-gs = 0
-ge = len(sequences['NODE_0000000']) // n
-genome_sentence_range = range(gs, ge)
-n_sentences = len(genome_sentence_range)
-train_aux = np.zeros((N * n_sentences, 1))
-train_enc_in = np.zeros((N * n_sentences, n, d_enc), dtype='float32')
-train_dec_in = np.zeros((N * n_sentences, n+2, d_dec), dtype='float32')
-train_enc_out = np.zeros((N * n_sentences, n, d_enc), dtype='float32')
-train_dec_out = np.zeros((N * n_sentences, n+2, d_dec), dtype='float32')
-j = 0
-# for i in np.random.randint(0, np.shape(relations)[0], size=N):
-# for i in range(N):
-for i in wanted_relations:
-    g, d, A, D = relations.iloc[i,:].T.values
-    train_aux[j:(j+1)*n_sentences,] = np.array([d])
-    for k in genome_sentence_range:
-        # Make deep copy of sequences in order to manipulate them
-        A_seq = deepcopy(sequences[A])[(k*n):(k*n+n+1)]
-        D_seq = deepcopy(sequences[D])[(k*n):(k*n+n+1)]
-        # Remove gaps
-        A_seq = A_seq.replace('-','')
-        D_seq = D_seq.replace('-','')
-        # Add start and end tokens to decoder input
-        D_seq = '^' + D_seq + '$'
-        # Pad sequences to desired length
-        A_seq = A_seq + ' '*(n - len(A_seq) + 1)
-        D_seq = D_seq + ' '*(n + 2 - len(D_seq) + 1)
-        # Turn sequences into integer vectors
-        A_seq = seq2int(A_seq)
-        D_seq = seq2int(D_seq)
-        # Store as encoder and decoder inputs
-        train_enc_in[j*n_sentences+k-gs, :, :] = onehot(A_seq[:-1], d_enc)
-        train_dec_in[j*n_sentences+k-gs, :, :] = onehot(D_seq[:-1], d_dec)
-        # Store as encoder and decoder outputs
-        train_enc_out[j*n_sentences+k-gs, :, :] = onehot(A_seq[1:], d_enc)
-        train_dec_out[j*n_sentences+k-gs, :, :] = onehot(D_seq[1:], d_dec)
-    j += 1
+# The genome allows for a certain number of overlapping sentences
+n_sentences = len(sequences['NODE_0000000']) - n
 
+# Randomly shuffle the relations indices
+relation_indices = list(relations.index.values)
+np.random.shuffle(relation_indices)
 
-# Fit the model using training data
-model.fit(
-    [train_enc_in, train_dec_in, train_aux],
-    [train_dec_out],
-    epochs=20, batch_size=256, shuffle=True
-)
+# Function to train on subset of relations
+def train_on_subset(model, M):
+    # Determine which relations of count 'm' are to be trained upon
+    wanted_relations = relation_indices[(M*m):(M*m+m)]
+    # Determine the number of relations (fewer in last round)
+    N = len(wanted_relations)
+    # Initialize training data arrays
+    train_aux = np.zeros((N * n_sentences, 1))
+    train_enc_in = np.zeros((N * n_sentences, n, d_enc), dtype='float32')
+    train_dec_in = np.zeros((N * n_sentences, n+2, d_dec), dtype='float32')
+    train_dec_out = np.zeros((N * n_sentences, n+2, d_dec), dtype='float32')
+    # Initialize relation counter to zero
+    j = 0
+    # Iterate over relations indices 'i'
+    for i in wanted_relations:
+        # Extract information about the j:th relation
+        g, d, A, D = relations.iloc[i,:].T.values
+        # Every part of the genome will have the same distance value
+        train_aux[j:(j+1)*n_sentences,] = np.array([d])
+        # Iterate over sentences 'k' with length 'n' in the genome
+        for k in range(n_sentences):
+            # Make deep copy of sequences in order to manipulate them
+            A_seq = deepcopy(sequences[A])[(k*n):(k*n+n+1)]
+            D_seq = deepcopy(sequences[D])[(k*n):(k*n+n+1)]
+            # Remove gaps
+            A_seq = A_seq.replace('-','')
+            D_seq = D_seq.replace('-','')
+            # Add start and end tokens to decoder input
+            D_seq = '^' + D_seq + '$'
+            # Pad sequences to desired length
+            A_seq += ' '*(n - len(A_seq) + 1)
+            D_seq += ' '*(n + 2 - len(D_seq) + 1)
+            # Turn sequences into integer vectors
+            A_seq = seq2int(A_seq)
+            D_seq = seq2int(D_seq)
+            # Store as encoder and decoder inputs
+            train_enc_in[j*n_sentences+k, :, :] = onehot(A_seq[:-1], d_enc)
+            train_dec_in[j*n_sentences+k, :, :] = onehot(D_seq[:-1], d_dec)
+            # Store as decoder output
+            train_dec_out[j*n_sentences+k, :, :] = onehot(D_seq[1:], d_dec)
+        j += 1
+        print(
+            "Formatting data: " + str(np.round(j/m*100, 1)) + "%",
+            end="\r", flush=True
+        )
+    # Fit the model using training data
+    _ = model.fit(
+        [train_enc_in, train_dec_in, train_aux],
+        [train_dec_out],
+        epochs=1, batch_size=256, shuffle=True
+    )
+    return model
 
-# Make predictions
-def mutate(sequence, distance, model):
-    # Turn the sequence into the expected encoder input
-    encoder_input = np.eye(d_enc)[seq2int(sequence + ' '*(n - len(sequence)))]
-    encoder_input = tf.expand_dims(encoder_input, 0)
-    # Turn the distance into the expected auxiliary input
-    auxiliary_input = np.array([distance])
-    auxiliary_input = tf.expand_dims(auxiliary_input, 0)
-    # Prepare an initial decoder input
-    decoder_input = np.eye(d_dec)[np.array([char2ind["^"]] * (n+2))]
-    decoder_input = tf.expand_dims(decoder_input, 0)
-    # Evaluate
-    for t in range(decoder_input.shape[1]):
-        pred = model.predict([encoder_input, decoder_input, auxiliary_input])
-        p = np.array(pred[-1][t])
-        character = np.random.choice(range(0, d_dec), 1, p = p)
-        decoder_input = np.array(decoder_input[0])
-        if t < decoder_input.shape[0]-1:
-            decoder_input[t+1] = np.eye(d_dec)[character]
-            decoder_input = tf.expand_dims(decoder_input, 0)
-    return ''.join(ind2char[np.argmax(decoder_input, axis=1)])
+# Iterate over sets of relations
+for M in range(int(np.ceil(relations.shape[0] / m))):
+    if not M % 10:
+        model.save(outdir + "/aux_input_rnn." + str(M) + ".model")
+    model = train_on_subset(model, M)
+    _ = gc.collect()
 
-# Interesting data and location?
-i = 736903
-g, d, A, D = relations.iloc[i,:].T.values
-start_pos = 4500
-end_pos = 4516
-
-sequence = sequences[A][start_pos:end_pos].replace('-','')
+# Save final trained model
+model.save(outdir + "/aux_input_rnn." + str(M) + ".model")
