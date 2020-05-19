@@ -3,8 +3,33 @@
 
 import tensorflow as tf
 from tensorflow.keras.layers import *
+from tensorflow.keras.models import *
 
-class CNN(tf.keras.Model):
+def get_cnn(k, n_gen, embedding_size):
+
+        model = Sequential()
+        model.add(Conv2D(64, kernel_size=(3, 3), strides=(1, 1),
+                 activation='relu',
+                 input_shape=(k, n_gen, embedding_size)))
+        model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+        model.add(Conv2D(64, (3, 3), activation='relu'))
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+        model.add(Flatten())
+        model.add(Dense(100, activation='relu'))
+        model.add(tf.keras.layers.Dense(6, activation='softmax', use_bias=False))
+
+        model.compile(optimizer='adam',
+              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+              metrics=['accuracy'])
+        print(model.summary())
+        return model
+
+
+class CNN():
+
+    def __init__(self, d1, d2):
+        self.d1 = d1
+        self.d2 = d2
 
     def __init__(self):
         super(CNN, self).__init__()
@@ -30,5 +55,5 @@ class CNN(tf.keras.Model):
         self.compile(optimizer='adam',
               loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
               metrics=['accuracy'])
-              
+
         return None

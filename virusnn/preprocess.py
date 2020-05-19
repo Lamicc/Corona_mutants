@@ -11,8 +11,8 @@ base2code_dna = {'A': 1, 'C': 2, 'G': 3, 'T': 4, 'N': 5, '-':0}
 def seq2code(seq):
     return [base2code_dna[x] for x in seq]
 
-def get_ancestral_list(sample_id, tsvfile):
-    df = pd.read_csv(tsvfile, delimiter = "\t")
+def get_ancestral_list(sample_id, df):
+    #df = pd.read_csv(tsvfile, delimiter = "\t")
     ndf = df.loc[df['Descendant'] == sample_id]
     return ndf.Ancestor
 
@@ -36,7 +36,7 @@ def get_ancestral_seq(sample_id, n_gen, seq_dict, ancestor_list):
 
 def extract_kmer_feature(sample_id, k, ancestral_df,df ):
     mid_base = int(k/2)
-    for i in range(len(ancestral_df)-4):
+    for i in range(len(ancestral_df)-k):
         kmer = ancestral_df['history_seq'][i:i+k].values
         kmer_stack = tf.stack(kmer)
         target = ancestral_df.loc[ancestral_df['pos'] == (i+mid_base)]['label'].values[0]
@@ -46,20 +46,23 @@ def extract_kmer_feature(sample_id, k, ancestral_df,df ):
 
 
 def preprocess(tsvfile, fasta_file):
-    n_gen = 10
-    k = 5
-    sample_id = 'EPI_ISL_402121'
-    ancestor_list = get_ancestral_list(sample_id, tsvfile)
+    n_gen = 20
+    k = 11
+    #sample_id = 'EPI_ISL_402123'
+    samples_df = pd.read_csv(tsvfile, delimiter = "\t")
+    samples = samples_df['Descendant'].unique()
     seq_dict = fasta_to_dict(fasta_file)
-    ans_df = get_ancestral_seq(sample_id, n_gen, seq_dict, ancestor_list)
     df = pd.DataFrame(columns=['sample','pos','kmer','label'])
-    df = extract_kmer_feature(sample_id,k, ans_df,df)
+    for sample_id in ['EPI_ISL_402129','EPI_ISL_402130','EPI_ISL_402128','EPI_ISL_403928','EPI_ISL_403929']:
+        ancestor_list = get_ancestral_list(sample_id, samples_df)
+        ans_df = get_ancestral_seq(sample_id, n_gen, seq_dict, ancestor_list)
+        df = extract_kmer_feature(sample_id,k, ans_df,df)
     sample = [i for i in df['sample'].values]
     kmer = [i for i in df['kmer'].values]
     pos = [i for i in df['pos'].values]
     label = [i for i in df['label'].values]
 
-    file_name = 'test_80.h5'
+    file_name = 'train_80.h5'
 
     with h5py.File(file_name, 'w') as hf:
         #hf.create_dataset('sample',  data=np.stack(sample))
