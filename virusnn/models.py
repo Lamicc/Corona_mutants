@@ -16,7 +16,7 @@ def get_cnn(k, n_gen, embedding_size):
         model.add(MaxPooling2D(pool_size=(2, 2)))
         model.add(Flatten())
         model.add(Dense(100, activation='relu'))
-        model.add(tf.keras.layers.Dense(6, activation='softmax', use_bias=False))
+        model.add(tf.keras.layers.Dense(6, activation='relu', use_bias=False))
 
         model.compile(optimizer='adam',
               loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
